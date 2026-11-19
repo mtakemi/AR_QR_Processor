@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="ja" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AR / QR Processor</title>
+  <meta name="description" content="ARマーカー(ArUco / AprilTag)とQRコードの生成・画像解析をブラウザだけで行うツール">
+  <!-- GitHub Pages cannot send HTTP headers, so the policy is set here.
+       'wasm-unsafe-eval' is required to compile the QR decoder (WebAssembly); no JS eval is allowed. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self'; media-src 'self' blob: mediastream:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <script src="js/theme.js"></script>
+  <link rel="stylesheet" href="vendor/bootstrap/bootstrap.min.css">
+  <link rel="stylesheet" href="vendor/bootstrap-icons/bootstrap-icons.min.css">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <nav class="navbar border-bottom bg-body-tertiary">
+    <div class="container-xl">
+      <span class="navbar-brand d-flex align-items-center gap-2 fw-semibold">
+        <i class="bi bi-qr-code-scan text-primary"></i> AR / QR Processor
+      </span>
+      <div class="d-flex align-items-center gap-2 gap-md-3">
+        <span class="small text-body-secondary d-none d-md-inline"><i class="bi bi-shield-check"></i> <span data-i18n="nav.privacy">画像はブラウザ内でのみ処理されます</span></span>
+        <div class="input-group input-group-sm w-auto">
+          <span class="input-group-text"><i class="bi bi-translate"></i></span>
+          <select id="langSelect" class="form-select form-select-sm" data-i18n-attr="aria-label:nav.langAria" aria-label="表示言語">
+            <option value="ja" lang="ja">日本語</option>
+            <option value="en" lang="en">English</option>
+          </select>
+        </div>
+        <button id="themeToggle" class="btn btn-sm btn-outline-secondary" type="button" data-i18n-attr="title:nav.themeTitle;aria-label:nav.themeAria" title="ライト / ダーク切り替え" aria-label="テーマ切り替え">
+          <i class="bi bi-circle-half"></i>
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container-xl py-4">
+    <!-- ================= Image analysis ================= -->
+    <section id="analyze" class="card shadow-sm mb-4">
+      <div class="card-header bg-body d-flex flex-wrap align-items-center gap-2 py-3">
+        <h2 class="h5 mb-0 me-auto"><i class="bi bi-search me-1"></i><span data-i18n="an.title">画像解析</span></h2>
+        <div class="d-flex flex-wrap gap-2">
+          <label class="btn btn-primary btn-sm mb-0" for="fileInput"><i class="bi bi-image me-1"></i><span data-i18n="an.file">画像を選択</span></label>
+          <input id="fileInput" type="file" accept="image/*" class="d-none">
+          <button id="pasteBtn" class="btn btn-outline-primary btn-sm" type="button"><i class="bi bi-clipboard me-1"></i><span data-i18n="an.paste">クリップボードから</span></button>
+          <button id="cameraBtn" class="btn btn-outline-primary btn-sm" type="button"><i class="bi bi-camera-video me-1"></i><span data-i18n="an.camera">カメラで読み取り</span></button>
+          <button id="clearBtn" class="btn btn-outline-secondary btn-sm" type="button" disabled><i class="bi bi-x-lg me-1"></i><span data-i18n="an.clear">クリア</span></button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="row g-4">
+          <div class="col-lg-7">
+            <div id="stage" class="stage rounded-3" tabindex="0" data-i18n-attr="aria-label:an.dropAria" aria-label="画像のドロップ領域">
+              <div id="dropHint" class="drop-hint text-center p-4">
+                <i class="bi bi-cloud-arrow-up display-5 text-primary"></i>
+                <p class="fw-semibold mt-2 mb-1"><span data-i18n="an.hint1">画像をドロップ / クリックして選択 / </span><kbd>Ctrl</kbd>+<kbd>V</kbd><span data-i18n="an.hint2"> で貼り付け</span></p>
+                <p class="small text-body-secondary mb-0" data-i18n="an.hintSub">QRコード・Micro QR・rMQR と ArUco / AprilTag マーカーを検出します(1枚に複数あっても可)</p>
+              </div>
+              <canvas id="viewCanvas" class="d-none" data-i18n-attr="aria-label:an.resultAria" aria-label="解析結果"></canvas>
+              <div id="cameraWrap" class="camera-wrap d-none">
+                <video id="video" playsinline muted></video>
+                <canvas id="videoOverlay"></canvas>
+              </div>
+              <div id="busy" class="busy d-none"><div class="spinner-border text-primary" role="status"></div></div>
+            </div>
+            <div id="cameraBar" class="d-none mt-2">
+              <div class="d-flex flex-wrap align-items-center gap-2">
+                <span class="badge text-bg-danger live-dot"><i class="bi bi-record-fill"></i> LIVE</span>
+                <select id="cameraSelect" class="form-select form-select-sm w-auto" data-i18n-attr="aria-label:cam.select" aria-label="カメラ選択"></select>
+                <button id="captureBtn" class="btn btn-sm btn-outline-primary" type="button"><i class="bi bi-camera me-1"></i><span data-i18n="cam.capture">静止画にして詳しく解析</span></button>
+                <button id="stopCameraBtn" class="btn btn-sm btn-danger" type="button"><i class="bi bi-stop-fill me-1"></i><span data-i18n="cam.stop">カメラ停止</span></button>
+              </div>
+            </div>
+            <div id="imageInfo" class="small text-body-secondary mt-2"></div>
+          </div>
+
+          <div class="col-lg-5">
+            <details class="settings mb-3" open>
+              <summary class="fw-semibold small text-uppercase text-body-secondary" data-i18n="an.settings">検出設定</summary>
+              <div class="row g-2 mt-1">
+                <div class="col-12 d-flex flex-wrap gap-3">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="optQR" checked>
+                    <label class="form-check-label" for="optQR" data-i18n="an.optQR">QRコード</label>
+                  </div>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="optMarker" checked>
+                    <label class="form-check-label" for="optMarker" data-i18n="an.optMarker">ARマーカー</label>
+                  </div>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="optInverted">
+                    <label class="form-check-label" for="optInverted" data-i18n="an.optInverted">白黒反転マーカーも</label>
+                  </div>
+                </div>
+                <div class="col-8">
+                  <label class="form-label small mb-1" for="optDict" data-i18n="an.optDict">マーカー辞書</label>
+                  <select id="optDict" class="form-select form-select-sm"></select>
+                </div>
+                <div class="col-4">
+                  <label class="form-label small mb-1" for="optBorder" data-i18n="common.borderBits">黒枠ビット数</label>
+                  <input id="optBorder" type="number" class="form-control form-control-sm" min="1" max="4" value="1">
+                </div>
+              </div>
+            </details>
+
+            <div class="d-flex align-items-center mb-2">
+              <h3 class="h6 mb-0"><span data-i18n="an.results">検出結果</span> <span id="resultCount" class="badge rounded-pill text-bg-secondary">0</span></h3>
+              <span id="resultStatus" class="ms-auto small text-body-secondary"></span>
+            </div>
+            <div id="results" class="results vstack gap-2">
+              <div class="text-body-secondary small empty-msg" data-i18n="an.notYet">まだ解析していません。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="row g-4">
+      <!-- ================= QR generation ================= -->
+      <div class="col-lg-6">
+        <section id="qrgen" class="card shadow-sm h-100">
+          <div class="card-header bg-body py-3"><h2 class="h5 mb-0"><i class="bi bi-qr-code me-1"></i><span data-i18n="qr.title">QRコード生成</span></h2></div>
+          <div class="card-body">
+            <form id="qrForm" class="row g-2" autocomplete="off">
+              <div class="col-12">
+                <label class="form-label small mb-1" for="qrText" data-i18n="qr.data">データ</label>
+                <textarea id="qrText" class="form-control" rows="3">https://example.com/</textarea>
+                <div id="qrCount" class="form-text"></div>
+              </div>
+              <div class="col-sm-6">
+                <label class="form-label small mb-1" for="qrMode" data-i18n="qr.mode">エンコードモード</label>
+                <select id="qrMode" class="form-select form-select-sm"></select>
+              </div>
+              <div class="col-sm-6">
+                <label class="form-label small mb-1" for="qrEcl" data-i18n="qr.ecl">誤り訂正レベル</label>
+                <select id="qrEcl" class="form-select form-select-sm">
+                  <option value="L" data-i18n="qr.eclL">L(約7%復元)</option>
+                  <option value="M" data-i18n="qr.eclM" selected>M(約15%復元)</option>
+                  <option value="Q" data-i18n="qr.eclQ">Q(約25%復元)</option>
+                  <option value="H" data-i18n="qr.eclH">H(約30%復元)</option>
+                </select>
+              </div>
+              <div class="col-6 col-sm-3">
+                <label class="form-label small mb-1" for="qrVersion" data-i18n="qr.version">バージョン</label>
+                <select id="qrVersion" class="form-select form-select-sm"></select>
+              </div>
+              <div class="col-6 col-sm-3">
+                <label class="form-label small mb-1" for="qrMask" data-i18n="qr.mask">マスク</label>
+                <select id="qrMask" class="form-select form-select-sm"></select>
+              </div>
+              <div class="col-6 col-sm-3">
+                <label class="form-label small mb-1" for="qrMargin" data-i18n="qr.margin">余白(セル)</label>
+                <input id="qrMargin" type="number" class="form-control form-control-sm" min="0" max="20" value="4">
+              </div>
+              <div class="col-6 col-sm-3">
+                <label class="form-label small mb-1" for="qrScale" data-i18n="common.cellPx">1セルのpx</label>
+                <input id="qrScale" type="number" class="form-control form-control-sm" min="1" max="50" value="8">
+              </div>
+              <div class="col-6">
+                <label class="form-label small mb-1" for="qrDark" data-i18n="qr.dark">前景色</label>
+                <input id="qrDark" type="color" class="form-control form-control-sm form-control-color w-100" value="#000000">
+              </div>
+              <div class="col-6">
+                <label class="form-label small mb-1" for="qrLight" data-i18n="qr.light">背景色</label>
+                <input id="qrLight" type="color" class="form-control form-control-sm form-control-color w-100" value="#ffffff">
+              </div>
+            </form>
+            <div id="qrError" class="alert alert-warning py-2 small mt-3 d-none"></div>
+            <div class="preview mt-3"><canvas id="qrCanvas" data-i18n-attr="aria-label:qr.previewAria" aria-label="QRコードのプレビュー"></canvas></div>
+            <div id="qrInfo" class="small text-body-secondary mt-2 text-center"></div>
+            <div class="d-flex flex-wrap gap-2 justify-content-center mt-3">
+              <button id="qrPng" class="btn btn-sm btn-primary" type="button"><i class="bi bi-download me-1"></i>PNG</button>
+              <button id="qrSvg" class="btn btn-sm btn-outline-primary" type="button"><i class="bi bi-filetype-svg me-1"></i>SVG</button>
+              <button id="qrCopy" class="btn btn-sm btn-outline-secondary" type="button"><i class="bi bi-clipboard me-1"></i><span data-i18n="common.copyImage">画像をコピー</span></button>
+              <button id="qrAnalyze" class="btn btn-sm btn-outline-secondary" type="button"><i class="bi bi-arrow-up-circle me-1"></i><span data-i18n="common.tryAnalyze">解析してみる</span></button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ================= AR marker generation ================= -->
+      <div class="col-lg-6">
+        <section id="markergen" class="card shadow-sm h-100">
+          <div class="card-header bg-body py-3"><h2 class="h5 mb-0"><i class="bi bi-grid-3x3 me-1"></i><span data-i18n="mk.title">ARマーカー生成(ArUco / AprilTag)</span></h2></div>
+          <div class="card-body">
+            <form id="mkForm" class="row g-2" autocomplete="off">
+              <div class="col-sm-8">
+                <label class="form-label small mb-1" for="mkDict" data-i18n="mk.dict">辞書</label>
+                <select id="mkDict" class="form-select form-select-sm"></select>
+              </div>
+              <div class="col-sm-4">
+                <label class="form-label small mb-1" for="mkId">ID <span id="mkIdRange" class="text-body-secondary"></span></label>
+                <div class="input-group input-group-sm">
+                  <input id="mkId" type="number" class="form-control" min="0" value="0">
+                  <button id="mkRandom" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:mk.random;aria-label:mk.randomAria" title="ランダム" aria-label="ランダムなID"><i class="bi bi-shuffle"></i></button>
+                </div>
+              </div>
+              <div class="col-6 col-sm-3">
+                <label class="form-label small mb-1" for="mkBorder" data-i18n="common.borderBits">黒枠ビット数</label>
+                <input id="mkBorder" type="number" class="form-control form-control-sm" min="1" max="4" value="1">
+              </div>
+              <div class="col-6 col-sm-3">
+                <label class="form-label small mb-1" for="mkQuiet" data-i18n="mk.quiet">白余白(セル)</label>
+                <input id="mkQuiet" type="number" class="form-control form-control-sm" min="0" max="10" value="1">
+              </div>
+              <div class="col-6 col-sm-3">
+                <label class="form-label small mb-1" for="mkCell" data-i18n="common.cellPx">1セルのpx</label>
+                <input id="mkCell" type="number" class="form-control form-control-sm" min="1" max="200" value="40">
+              </div>
+              <div class="col-6 col-sm-3">
+                <label class="form-label small mb-1" for="mkMm" data-i18n="mk.mm">SVG印刷(mm)</label>
+                <input id="mkMm" type="number" class="form-control form-control-sm" min="0" step="1" data-i18n-attr="placeholder:mk.mmPlaceholder;title:mk.mmTitle" placeholder="指定なし" title="検出される四隅の間の一辺の長さ(mm)。ArUco/classic AprilTag は黒枠の外側、AprilTag 3 は白枠の外側">
+              </div>
+              <div class="col-12">
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" id="mkLabel">
+                  <label class="form-check-label small" for="mkLabel" data-i18n="mk.label">下に辞書名とIDを表示</label>
+                </div>
+              </div>
+            </form>
+            <div id="mkError" class="alert alert-warning py-2 small mt-3 d-none"></div>
+            <div class="preview mt-3"><canvas id="mkCanvas" data-i18n-attr="aria-label:mk.previewAria" aria-label="ARマーカーのプレビュー"></canvas></div>
+            <div id="mkInfo" class="small text-body-secondary mt-2 text-center"></div>
+            <div class="d-flex flex-wrap gap-2 justify-content-center mt-3">
+              <button id="mkPng" class="btn btn-sm btn-primary" type="button"><i class="bi bi-download me-1"></i>PNG</button>
+              <button id="mkSvg" class="btn btn-sm btn-outline-primary" type="button"><i class="bi bi-filetype-svg me-1"></i>SVG</button>
+              <button id="mkCopy" class="btn btn-sm btn-outline-secondary" type="button"><i class="bi bi-clipboard me-1"></i><span data-i18n="common.copyImage">画像をコピー</span></button>
+              <button id="mkAnalyze" class="btn btn-sm btn-outline-secondary" type="button"><i class="bi bi-arrow-up-circle me-1"></i><span data-i18n="common.tryAnalyze">解析してみる</span></button>
+            </div>
+
+            <details id="batch" class="batch mt-4 pt-3 border-top" open>
+              <summary class="fw-semibold"><i class="bi bi-printer me-1"></i><span data-i18n="b.title">一括生成(印刷用 PDF)</span></summary>
+              <p class="small text-body-secondary mt-2 mb-2" data-i18n="b.desc">上で選んだ辞書・黒枠・白余白の設定で、複数の ID を A4 / A3 に並べた PDF を作ります。各マーカーは必須の白余白を個別に持つので、点線で切り取っても余白が確保されます。</p>
+              <form id="bForm" class="row g-2" autocomplete="off">
+                <div class="col-12">
+                  <label class="form-label small mb-1" for="bIds" data-i18n="b.ids">ID</label>
+                  <input id="bIds" type="text" class="form-control form-control-sm" value="0-5" data-i18n-attr="placeholder:b.idsPlaceholder" placeholder="例: 1-5 / 1,2-4,7">
+                </div>
+                <div class="col-6 col-sm-3">
+                  <label class="form-label small mb-1" for="bPaper" data-i18n="b.paper">用紙</label>
+                  <select id="bPaper" class="form-select form-select-sm">
+                    <option value="A4" selected>A4</option>
+                    <option value="A3">A3</option>
+                  </select>
+                </div>
+                <div class="col-6 col-sm-3">
+                  <label class="form-label small mb-1" for="bOrient" data-i18n="b.orient">向き</label>
+                  <select id="bOrient" class="form-select form-select-sm">
+                    <option value="portrait" data-i18n="b.portrait" selected>縦</option>
+                    <option value="landscape" data-i18n="b.landscape">横</option>
+                  </select>
+                </div>
+                <div class="col-6 col-sm-6">
+                  <label class="form-label small mb-1" for="bBasis" data-i18n="b.basis">サイズの基準</label>
+                  <select id="bBasis" class="form-select form-select-sm">
+                    <option value="detect" data-i18n="b.basisDetect" selected>検出枠(姿勢推定で使うマーカー長)</option>
+                    <option value="outer" data-i18n="b.basisOuter">マーカー外寸(白余白を除く)</option>
+                  </select>
+                </div>
+                <div class="col-6 col-sm-2">
+                  <label class="form-label small mb-1" for="bMm" data-i18n="b.mm" data-i18n-attr="title:b.mmTitle" title="ArUco / classic AprilTag の検出枠は黒枠の外側、AprilTag 3 は白枠の外側">サイズ mm</label>
+                  <input id="bMm" type="number" class="form-control form-control-sm" min="5" max="400" step="1" value="50">
+                </div>
+                <div class="col-4 col-sm-2">
+                  <label class="form-label small mb-1" for="bMargin" data-i18n="b.margin">用紙余白</label>
+                  <input id="bMargin" type="number" class="form-control form-control-sm" min="0" max="50" step="1" value="10">
+                </div>
+                <div class="col-4 col-sm-2">
+                  <label class="form-label small mb-1" for="bGap" data-i18n="b.gap" data-i18n-attr="title:b.gapTitle" title="切り取り枠どうしの間隔。0 なら隣の枠と切り取り線を共有します">枠の間隔 mm</label>
+                  <input id="bGap" type="number" class="form-control form-control-sm" min="0" max="50" step="1" value="0">
+                </div>
+                <div class="col-12 d-flex flex-wrap gap-3">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="bCut" checked>
+                    <label class="form-check-label small" for="bCut" data-i18n="b.cut">切り取り線(点線)で白余白ごと囲む</label>
+                  </div>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="bLabel" checked>
+                    <label class="form-check-label small" for="bLabel" data-i18n="b.label">辞書名と ID を印字(枠内・白余白の外)</label>
+                  </div>
+                </div>
+              </form>
+              <div id="bWarn" class="alert alert-warning py-2 small mt-2 d-none"></div>
+              <div id="bInfo" class="small text-body-secondary mt-2"></div>
+              <div class="preview mt-2"><canvas id="bCanvas" data-i18n-attr="aria-label:b.previewAria" aria-label="印刷レイアウトのプレビュー(1ページ目)"></canvas></div>
+              <div class="d-flex flex-wrap gap-2 justify-content-center mt-3">
+                <button id="bPdf" class="btn btn-sm btn-primary" type="button"><i class="bi bi-file-earmark-pdf me-1"></i><span data-i18n="b.pdf">PDF をダウンロード</span></button>
+              </div>
+            </details>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <footer class="border-top py-3 small text-body-secondary">
+    <div class="container-xl d-flex flex-wrap gap-2 justify-content-between">
+      <span data-i18n="foot.left">AR / QR Processor — 静的ページ / すべての処理はブラウザ内で完結</span>
+      <span data-i18n="foot.right">使用ライブラリ: Bootstrap, Bootstrap Icons, node-qrcode, zxing-wasm(zxing-cpp)/ 辞書データ: OpenCV, AprilTag 3</span>
+      <span class="w-100" data-i18n="foot.trademark">QRコードは株式会社デンソーウェーブの登録商標です。</span>
+    </div>
+  </footer>
+
+  <div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="toast" class="toast align-items-center text-bg-dark border-0" role="status" aria-live="polite" aria-atomic="true">
+      <div class="d-flex"><div class="toast-body" id="toastBody"></div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" data-i18n-attr="aria-label:common.close" aria-label="閉じる"></button></div>
+    </div>
+  </div>
+
+  <script src="vendor/bootstrap/bootstrap.bundle.min.js"></script>
+  <script src="vendor/qrcode/qrcode.bundle.js"></script>
+  <script src="vendor/zxing-wasm/zxing-reader.iife.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
